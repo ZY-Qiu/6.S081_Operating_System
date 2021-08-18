@@ -20,6 +20,7 @@ static void wakeup1(struct proc *chan);
 static void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
+extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 // initialize the proc table at boot time.
 void
@@ -34,14 +35,14 @@ procinit(void)
       // Allocate a page for the process's kernel stack.
       // Map it high in memory, followed by an invalid
       // guard page.
-      char *pa = kalloc();
+      /*char *pa = kalloc();
       if(pa == 0)
         panic("kalloc");
       uint64 va = KSTACK((int) (p - proc));
       kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
-      p->kstack = va;
+      p->kstack = va;*/
   }
-  kvminithart();
+  //kvminithart();
 }
 
 // Must be called with interrupts disabled,
@@ -113,6 +114,15 @@ found:
     return 0;
   }
 
+  // Allocate kstack for each proecess's kernel
+  p->kp = kvmmake();
+  char *pa = kalloc();
+  if(pa == 0)
+      panic("kalloc");
+  uint64 va = KSTACK(0);
+  mappages(p->kp, va, PGSIZE, (uint64)pa, PTE_R | PTE_W);
+  p->kstack = va;
+
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
   if(p->pagetable == 0){
@@ -130,6 +140,21 @@ found:
   return p;
 }
 
+// Free a process's kernel page table, and free the
+// physical memory it refers to.
+void
+proc_freekp(pagetable_t kp, uint64 kstack)
+{
+    uvmunmap(kp, UART0, 1, 0);
+    uvmunmap(kp, VIRTIO0, 1, 0);
+    uvmunmap(kp, PLIC, 0x400000/PGSIZE, 0);
+    uvmunmap(kp, KERNBASE, ((uint64)etext-KERNBASE)/PGSIZE, 0);
+    uvmunmap(kp, (uint64)etext, (PHYSTOP-(uint64)etext)/PGSIZE, 0);
+    uvmunmap(kp, TRAMPOLINE, 1, 0);
+
+    ksfree(kp, kstack, 1);
+}
+
 // free a proc structure and the data hanging from it,
 // including user pages.
 // p->lock must be held.
@@ -141,6 +166,8 @@ freeproc(struct proc *p)
   p->trapframe = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
+  if(p->kp)
+      proc_freekp(p->kp, p->kstack);
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -471,12 +498,18 @@ scheduler(void)
         // Switch to chosen process.  It is the process's job
         // to release its lock and then reacquire it
         // before jumping back to us.
+        // Load the process's kernel page_table
         p->state = RUNNING;
         c->proc = p;
+        //w_satp(MAKE_SATP(p->kp));
+        //sfence_vma();
         swtch(&c->context, &p->context);
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
+        // Load the global kernel page_table
+        printf("In scheduler.\n");
+        //kvminithart();
         c->proc = 0;
 
         found = 1;

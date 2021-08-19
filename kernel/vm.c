@@ -21,8 +21,7 @@ extern char trampoline[]; // trampoline.S
 /*
  * create a direct-map page table for the kernel.
  */
-pagetable_t
-kvmmake()
+pagetable_t kvmmake()
 {
   pagetable_t kp = (pagetable_t) kalloc();
   memset(kp, 0, PGSIZE);
@@ -34,7 +33,7 @@ kvmmake()
   mappages(kp, VIRTIO0, PGSIZE, VIRTIO0, PTE_R | PTE_W);
 
   // CLINT Should not map clint
-  //kvmmap(CLINT, CLINT, 0x10000, PTE_R | PTE_W);
+  //mappages(kernel_pagetable, CLINT, 0x10000, CLINT, PTE_R | PTE_W);
 
   // PLIC
   mappages(kp, PLIC, 0x400000, PLIC, PTE_R | PTE_W);
@@ -47,38 +46,19 @@ kvmmake()
 
   // map the trampoline for trap entry/exit to
   // the highest virtual address in the kernel.
-  mappages(kp, TRAMPOLINE, PGSIZE, (uint64)TRAMPOLINE, PTE_R | PTE_X);
+  mappages(kp, TRAMPOLINE, PGSIZE, (uint64)trampoline, PTE_R | PTE_X);
 
+  //printf("kvmmake() end,\n");
   return kp;
 }
 
 void
 kvminit()
 {
-    kernel_pagetable = (pagetable_t) kalloc();
-    memset(kernel_pagetable, 0, PGSIZE);
+    kernel_pagetable = kvmmake();
 
-    // uart registers
-    kvmmap(UART0, UART0, PGSIZE, PTE_R | PTE_W);
+    mappages(kernel_pagetable, CLINT, 0x10000, CLINT, PTE_R | PTE_W);
 
-    // virtio mmio disk interface
-    kvmmap(VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
-
-    // CLINT
-    kvmmap(CLINT, CLINT, 0x10000, PTE_R | PTE_W);
-
-    // PLIC
-    kvmmap(PLIC, PLIC, 0x400000, PTE_R | PTE_W);
-
-    // map kernel text executable and read-only.
-    kvmmap(KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
-
-    // map kernel data and the physical RAM we'll make use of.
-    kvmmap((uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
-
-    // map the trampoline for trap entry/exit to
-    // the highest virtual address in the kernel.
-    kvmmap(TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
 }
 
 // Switch h/w page table register to the kernel's page table,
@@ -86,7 +66,6 @@ kvminit()
 void
 kvminithart()
 {
-    printf("Running kvminithart().\n");
     w_satp(MAKE_SATP(kernel_pagetable));
     sfence_vma();
 }
@@ -168,6 +147,7 @@ kvmpa(uint64 va)
   uint64 pa;
   
   pte = walk(myproc()->kp, va, 0);
+  //pte = walk(kernel_pagetable, va, 0);
   if(pte == 0)
     panic("kvmpa");
   if((*pte & PTE_V) == 0)
@@ -355,6 +335,7 @@ print(pagetable_t pagetable, int level)
 void
 vmprint(pagetable_t pagetable)
 {
+  //printf("Running vmprint().\n");
   printf("page table %p\n", pagetable);
   print(pagetable, 0);
 }

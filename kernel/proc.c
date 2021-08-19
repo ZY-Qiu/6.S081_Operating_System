@@ -501,15 +501,14 @@ scheduler(void)
         // Load the process's kernel page_table
         p->state = RUNNING;
         c->proc = p;
-        //w_satp(MAKE_SATP(p->kp));
-        //sfence_vma();
+        w_satp(MAKE_SATP(p->kp));
+        sfence_vma();
         swtch(&c->context, &p->context);
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         // Load the global kernel page_table
-        printf("In scheduler.\n");
-        //kvminithart();
+        kvminithart();
         c->proc = 0;
 
         found = 1;

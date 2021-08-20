@@ -51,6 +51,8 @@ exec(char *path, char **argv)
     uint64 sz1;
     if((sz1 = uvmalloc(pagetable, sz, ph.vaddr + ph.memsz)) == 0)
       goto bad;
+    if(sz1 >= PLIC)
+        goto bad;
     sz = sz1;
     if(ph.vaddr % PGSIZE != 0)
       goto bad;
@@ -115,6 +117,14 @@ exec(char *path, char **argv)
   p->trapframe->epc = elf.entry;  // initial program counter = main
   p->trapframe->sp = sp; // initial stack pointer
   proc_freepagetable(oldpagetable, oldsz);
+
+  // unmap the user page mapping in kernel page table
+  uvmunmap(p->kp, 0, PGROUNDUP(oldsz)/PGSIZE, 0);
+  // map user 2 kernel
+  if(usermapkernel(p->pagetable, p->kp, 0, p->sz) < 0)
+  {
+      goto bad;
+  }
 
   if(p->pid == 1)
   {

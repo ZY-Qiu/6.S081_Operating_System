@@ -143,7 +143,7 @@ found:
 // Free a process's kernel page table, and free the
 // physical memory it refers to.
 void
-proc_freekp(pagetable_t kp, uint64 kstack)
+proc_freekp(pagetable_t kp, uint64 kstack, uint64 sz)
 {
     uvmunmap(kp, UART0, 1, 0);
     uvmunmap(kp, VIRTIO0, 1, 0);
@@ -151,6 +151,7 @@ proc_freekp(pagetable_t kp, uint64 kstack)
     uvmunmap(kp, KERNBASE, ((uint64)etext-KERNBASE)/PGSIZE, 0);
     uvmunmap(kp, (uint64)etext, (PHYSTOP-(uint64)etext)/PGSIZE, 0);
     uvmunmap(kp, TRAMPOLINE, 1, 0);
+    uvmunmap(kp, 0, PGROUNDUP(sz)/PGSIZE, 0);
 
     ksfree(kp, kstack, 1);
 }
@@ -167,7 +168,7 @@ freeproc(struct proc *p)
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   if(p->kp)
-      proc_freekp(p->kp, p->kstack);
+      proc_freekp(p->kp, p->kstack, p->sz);
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -248,6 +249,8 @@ userinit(void)
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
 
+  usermapkernel(p->pagetable, p->kp, 0, p->sz);
+
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
   p->trapframe->sp = PGSIZE;  // user stack pointer
@@ -273,8 +276,16 @@ growproc(int n)
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
+    if(usermapkernel(p->pagetable, p->kp, sz - n, sz)  < 0)
+    {
+        return -1;
+    }
   } else if(n < 0){
     sz = uvmdealloc(p->pagetable, sz, sz + n);
+    if(PGROUNDUP(sz) < PGROUNDUP(sz - n))
+    {
+        uvmunmap(p->kp, PGROUNDUP(sz), (PGROUNDUP(sz - n) - PGROUNDUP(sz)) / PGSIZE, 0);
+    }
   }
   p->sz = sz;
   return 0;
@@ -303,6 +314,11 @@ fork(void)
   np->sz = p->sz;
 
   np->parent = p;
+
+  if(usermapkernel(np->pagetable, np->kp, 0, np->sz) < 0)
+  {
+      return -1;
+  }
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);

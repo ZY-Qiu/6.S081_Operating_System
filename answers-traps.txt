@@ -1,0 +1,7 @@
+1. a0-a7 contain arguments. a2 holds 13.
+2. No function call in main due to compiler optimization.
+3. printf is at 0x628
+4. I do not know.
+5. Output: HE110 WORLD
+   For big-endian, set i to 0x726c64, i does not need to be changed.
+6. In generic IDE, it will become a syntax error; in a riscv-5 emulator, it will output weird value stored in the ax register.

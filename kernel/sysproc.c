@@ -43,12 +43,28 @@ sys_sbrk(void)
 {
   int addr;
   int n;
+  struct proc* p = myproc();
 
   if(argint(0, &n) < 0)
     return -1;
-  addr = myproc()->sz;
-  if(growproc(n) < 0)
-    return -1;
+  addr = p->sz;
+
+  if(addr + n >= MAXVA)
+  {
+      return addr;
+  }
+  p->sz = addr + n;
+  //if(growproc(n) < 0)
+  //  return -1;
+  if(n < 0)
+  {
+      if(p->sz > addr)
+      {
+          p->sz = uvmdealloc(p->pagetable, addr, 0);
+      }
+      else
+        p->sz = uvmdealloc(p->pagetable, addr, p->sz);
+  }
   return addr;
 }
 

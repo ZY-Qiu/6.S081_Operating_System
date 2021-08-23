@@ -14,6 +14,8 @@ void freerange(void *pa_start, void *pa_end);
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
 
+extern int refnum[];
+
 struct run {
   struct run *next;
 };
@@ -77,6 +79,10 @@ kalloc(void)
   release(&kmem.lock);
 
   if(r)
+  {
     memset((char*)r, 5, PGSIZE); // fill with junk
+  }
+  //if((uint64)r >= KERNBASE)
+  //  refnum[((uint64)r - KERNBASE) / PGSIZE] = 1;
   return (void*)r;
 }

@@ -15,6 +15,8 @@ extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
 
+int refnum[(int)((PHYSTOP - KERNBASE) / 4096)];
+
 /*
  * create a direct-map page table for the kernel.
  */
@@ -159,6 +161,8 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
     if(*pte & PTE_V)
       panic("remap");
     *pte = PA2PTE(pa) | perm | PTE_V;
+    if((uint64)pa >= KERNBASE)
+        refnum[((uint64)pa - KERNBASE) / PGSIZE] += 1;
     if(a == last)
       break;
     a += PGSIZE;
@@ -173,7 +177,7 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 void
 uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 {
-  uint64 a;
+  uint64 a, pa;
   pte_t *pte;
 
   if((va % PGSIZE) != 0)
@@ -186,9 +190,22 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       panic("uvmunmap: not mapped");
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
-    if(do_free){
-      uint64 pa = PTE2PA(*pte);
-      kfree((void*)pa);
+    pa = PTE2PA(*pte);
+    if(pa >= KERNBASE)
+      refnum[(pa - KERNBASE) / PGSIZE]--;
+    if(do_free)
+    {
+        if(refnum[(pa - KERNBASE) / PGSIZE] == 1)
+            kfree((void *) pa);
+        /*if(pa >= KERNBASE)
+        {
+            if(refnum[(pa - KERNBASE) / PGSIZE] == 0)
+                kfree((void *) pa);
+        }
+        else
+        {
+            kfree((void *) pa);
+        }*/
     }
     *pte = 0;
   }
@@ -309,9 +326,7 @@ int
 uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 {
   pte_t *pte;
-  uint64 pa, i;
-  uint flags;
-  char *mem;
+  uint64 pa, i, flags;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -319,20 +334,22 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
+    *pte |= PTE_COW;
+    *pte &= ~PTE_W;
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
-      goto err;
+
+    if(mappages(new, i, PGSIZE, pa, flags) != 0)
+    {
+        goto err;
     }
+    //if(pa >= KERNBASE)
+    //    refnum[(pa - KERNBASE) / PGSIZE] += 1;
   }
   return 0;
+err:
+    uvmunmap(new, 0, i / PGSIZE, 1);
+    return -1;
 
- err:
-  uvmunmap(new, 0, i / PGSIZE, 1);
-  return -1;
 }
 
 // mark a PTE invalid for user access.
@@ -355,12 +372,44 @@ int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
   uint64 n, va0, pa0;
-
+  //printf("In copyout.\n");
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
+    pte_t *pte;
+    uint64 *newpage, flags;
+
+    if((pte = walk(pagetable, va0, 0)) == 0)
+    {
+      return -1;
+    }
+    else if(*pte & PTE_COW)
+    {
+      if(refnum[(pa0 - KERNBASE) / PGSIZE] == 2) // if there is only one reference
+      {
+          *pte = *pte | PTE_W;
+          *pte = *pte & ~PTE_COW;
+      }
+      else if((newpage = kalloc()) == 0)
+      {
+          return -1;
+      }
+      else
+      {
+          refnum[(pa0 - KERNBASE) / PGSIZE]--;
+          memmove(newpage, (uint64 *)pa0, PGSIZE);
+
+          *pte = *pte | PTE_W;
+          *pte = *pte & ~PTE_COW;
+          flags = PTE_FLAGS(*pte);
+
+          *pte = PA2PTE((uint64)newpage) | flags;
+          refnum[((uint64)newpage - KERNBASE) / PGSIZE]++;
+          pa0 = (uint64)newpage;
+      }
+    }
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;

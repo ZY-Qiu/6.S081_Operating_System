@@ -1,0 +1,1 @@
+First, thread 1 and thread 2 both start to put(), they will insert an entry to the head of an array by indexing into an array of array, which is the hash table; then two threads will encounter a rece condition where their insertation into the same bucket will get lost.

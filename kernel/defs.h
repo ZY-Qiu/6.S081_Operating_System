@@ -108,6 +108,9 @@ void            procdump(void);
 // swtch.S
 void            swtch(struct context*, struct context*);
 
+// uthread_switch.S
+void            thread_switch(struct context *old, struct context *new);
+
 // spinlock.c
 void            acquire(struct spinlock*);
 int             holding(struct spinlock*);

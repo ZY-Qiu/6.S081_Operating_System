@@ -284,6 +284,50 @@ create(char *path, short type, short major, short minor)
 }
 
 uint64
+sys_symlink(void)
+{
+    char target[MAXPATH], path[MAXPATH];
+    struct inode *dp;
+
+    if(argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0)
+        return -1;
+
+    begin_op();
+
+    // open calls sys_read on the whole directory, thus already hold the lock for ip, causing deadlock here
+    /*
+    if((ip = namei(target)) != 0){
+        ilock(ip);
+        if(ip->type == T_DIR){
+            iunlockput(ip);
+            end_op();
+            return -1;
+        }
+        iunlockput(ip);
+    }*/
+
+    // ip is the inode of the target file
+    // dp is the inode at the path
+
+    if((dp = create(path, T_SYMLINK, 0, 0)) == 0){
+        end_op();
+        return -1;
+    }
+
+    //printf("before holding the lock of dp\n");
+    //ilock(dp); // already holding the lock for dp
+    //printf("after holding the lock of dp\n");
+    if(writei(dp, 0, (uint64)target, 0, MAXPATH) != MAXPATH)
+        panic("sys_symlink: writei\n");
+
+    //printf("symlink %p\n", dp->addrs);
+    iunlockput(dp);
+    end_op();
+
+    return 0;
+}
+
+uint64
 sys_open(void)
 {
   char path[MAXPATH];
@@ -313,6 +357,33 @@ sys_open(void)
       iunlockput(ip);
       end_op();
       return -1;
+    }
+    if((ip->type == T_SYMLINK) && !(omode & O_NOFOLLOW))
+    {
+        int i;
+        for(i = 0; i < 10; i++) // recurse at the depth of 10
+        {
+            if(readi(ip, 0, (uint64)path, 0, MAXPATH) == 0)
+            {
+                iunlockput(ip);
+                end_op();
+                return -1;
+            }
+            iunlockput(ip);
+            if((ip = namei(path)) == 0)
+            {
+                end_op();
+                return -1;
+            }
+            ilock(ip);
+            if(ip->type != T_SYMLINK)
+                break;
+        }
+        if(i == 10){
+            iunlockput(ip);
+            end_op();
+            return -1;
+        }
     }
   }
 

@@ -15,6 +15,7 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "vma.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -50,6 +51,113 @@ fdalloc(struct file *f)
     }
   }
   return -1;
+}
+
+uint64
+sys_mmap(void)
+{
+    struct proc* p;
+    int prot, flags, fd, i, length;
+    struct file* f;
+    struct vma* v;
+    // argv[0] is address, which is 0 in this particular lab
+    // argv[5] is offset, which is also 0 in this particular lab
+    if(argint(1, &length) < 0 || argint(2, &prot) < 0 || argint(3, &flags) < 0 || argfd(4, &fd, &f) < 0)
+        return 0xffffffffffffffff;
+
+    if(!f->readable && (prot & PROT_READ))
+        return 0xffffffffffffffff;
+    if(!f->writable && (prot & PROT_WRITE) && (flags & MAP_SHARED))
+        return 0xffffffffffffffff;
+
+    f->ref++;
+    p = myproc();
+
+    if((v = vmaalloc()) == 0)
+        return 0xffffffffffffffff;
+
+    acquire(&p->lock);
+    for(i = 0; i < 16; i++)
+    {
+        if(p->vma[i] == 0)
+        {
+            p->vma[i] = v;
+            break;
+        }
+    }
+
+    if(i == 16)
+        return 0xffffffffffffffff;
+
+    v->addr = (void *)PGROUNDUP(p->sz);
+    p->sz = (uint64)v->addr + PGROUNDUP(length);
+    release(&p->lock);
+    v->flags = flags;
+    v->prot = prot;
+    v->fd = fd;
+    v->file = f;
+    v->length = length;
+    v->valid = 1;
+
+    return (uint64)v->addr;
+}
+
+uint64
+sys_munmap(void)
+{
+    struct proc* p = myproc();
+    int length, addr, i, npages;
+    uint64 a, l;
+    struct vma* v;
+
+    if(argint(0, &addr) < 0 || argint(1, &length) < 0)
+        return -1;
+
+    for(i = 0 ; i < 16; i++)
+    {
+        if(p->vma[i] == 0)
+            continue;
+        a = (uint64)p->vma[i]->addr;
+        l = p->vma[i]->length;
+        v = p->vma[i];
+        // find out whether addr is in the address range a ~ a + l
+        if(addr >= a && addr < a + l)
+        {
+            if(addr + length >= a + l)
+                length = a + l - addr;
+            // if MAP_SHARED, write back to file
+            if((v->prot & PROT_WRITE) && (v->flags & MAP_SHARED) && v->file->writable)
+            {
+                begin_op();
+                ilock(v->file->ip);
+                writei(v->file->ip, 1, (uint64)addr, 0, length); // file size may be smaller than length
+                iunlockput(v->file->ip);
+                end_op();
+                //if(filewrite(v->file, (uint64)addr, length) < 0)
+                //    panic("munmap: filewrite");//return -1;
+            }
+            npages = (PGROUNDUP(addr + length) - PGROUNDDOWN(addr)) / PGSIZE;
+            //addr = PGROUNDDOWN(addr);
+            uvmunmap(p->pagetable, addr, npages, 1);
+            // if all field mapped by mmap is unmapped, decrese file ref count
+            if((addr == (uint64)v->addr) && (length == v->length)) // v->addr is already page aligned
+            {
+                v->file->ref--;
+                vmafree(v);
+                p->vma[i] = 0;
+            }
+            else
+            {
+                if(addr == (uint64)v->addr)
+                {
+                    v->addr = (void *)((uint64)v->addr + length);
+                }
+                v->length -= length;
+            }
+            return 0;
+        }
+    }
+    return -1;
 }
 
 uint64

@@ -8,6 +8,13 @@ struct spinlock;
 struct sleeplock;
 struct stat;
 struct superblock;
+struct vam;
+
+// vma.c
+void 		vmainit(void);
+struct vma* 	vmaalloc(void);
+void 		vmafree(struct vma*);
+
 
 // bio.c
 void            binit(void);

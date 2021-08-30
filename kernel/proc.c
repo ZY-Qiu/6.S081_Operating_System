@@ -5,6 +5,11 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "vma.h"
+#include "fcntl.h"
+#include "file.h"
 
 struct cpu cpus[NCPU];
 
@@ -280,6 +285,25 @@ fork(void)
     release(&np->lock);
     return -1;
   }
+
+  for(int j = 0; j < 16; j++)
+  {
+      if(p->vma[j])
+      {
+          if((np->vma[j] = vmaalloc()) == 0)
+              panic("fork: vmaalloc() = 0\n");
+          np->vma[j]->file = p->vma[j]->file;
+          np->vma[j]->length = p->vma[j]->length;
+          np->vma[j]->addr = p->vma[j]->addr;
+          np->vma[j]->flags = p->vma[j]->flags;
+          np->vma[j]->prot = p->vma[j]->prot;
+          np->vma[j]->valid = p->vma[j]->valid;
+          np->vma[j]->fd = p->vma[j]->fd;
+          //filedup(np->vma[j]->file);
+          np->vma[j]->file->ref++;
+      }
+  }
+
   np->sz = p->sz;
 
   np->parent = p;
@@ -343,6 +367,28 @@ exit(int status)
 
   if(p == initproc)
     panic("init exiting");
+
+  for(int i = 0 ; i < 16; i++) {
+      if (p->vma[i] == 0)
+          continue;
+      uint64 addr = (uint64) p->vma[i]->addr;
+      uint64 length = p->vma[i]->length;
+      struct vma* v = p->vma[i];
+
+      // if MAP_SHARED, write back to file
+      if ((v->prot & PROT_WRITE) && (v->flags & MAP_SHARED) && v->file->writable) {
+          //if (filewrite(v->file, (uint64) addr, length) < 0);
+          begin_op();
+          ilock(v->file->ip);
+          writei(v->file->ip, 1, (uint64)addr, 0, length); // file size may be smaller than length
+          iunlockput(v->file->ip);
+          end_op();
+      }
+      //fileclose(v->file);
+      v->file->ref--;
+      vmafree(v);
+      p->vma[i] = 0;
+    }
 
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){
